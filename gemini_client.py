@@ -2,8 +2,16 @@ from pathlib import Path
 import json
 import logging
 from google import genai
+from google.genai import types
 import time
 from typing import Optional
+from pydantic import BaseModel, Field, ValidationError
+
+class GeminiResponse(BaseModel):
+    """Gemini API 응답을 위한 Pydantic 모델"""
+    raw_response: Optional[str] = Field(None, description="파싱되지 않은 원본 응답")
+    parsed_data: Optional[dict] = Field(None, description="파싱된 JSON 데이터")
+    error: Optional[str] = Field(None, description="에러 메시지")
 
 class GeminiClient:
     def __init__(self, api_key, max_retries=3, retry_delay=5):
@@ -23,6 +31,10 @@ class GeminiClient:
         # 프롬프트 디렉토리 설정
         self.prompt_dir = Path('prompt')
 
+        self.config = types.GenerateContentConfig(
+            response_mime_type="application/json"
+        )
+
     def _call_api_with_retry(self, model: str, contents: str) -> Optional[str]:
         """재시도 로직이 포함된 API 호출
         Args:
@@ -35,7 +47,8 @@ class GeminiClient:
             try:
                 response = self.client.models.generate_content(
                     model=model,
-                    contents=contents
+                    contents=contents,
+                    config=self.config
                 )
                 return response.text
             except Exception as e:
@@ -114,12 +127,12 @@ class GeminiClient:
             self.logger.debug(f"상세 에러: {e}", exc_info=True)
             return None
             
-    def _parse_response(self, response_text):
+    def _parse_response(self, response_text: str) -> GeminiResponse:
         """응답 텍스트 파싱
         Args:
             response_text (str): Gemini API 응답 텍스트
         Returns:
-            dict: 파싱된 응답 또는 원본 텍스트
+            GeminiResponse: 파싱된 응답 모델
         """
         try:
             # 코드 블록 추출 (```로 시작하고 ```로 끝나는 부분)
@@ -135,17 +148,28 @@ class GeminiClient:
                 if code_block.startswith('json\n'):
                     code_block = code_block[5:]
                 
-                # JSON 파싱
-                return json.loads(code_block)
+                # JSON 파싱 및 Pydantic 모델 변환
+                parsed_data = json.loads(code_block)
+                return GeminiResponse(parsed_data=parsed_data)
             
-            # 코드 블록이 없는 경우 기존 로직 수행
+            # 코드 블록이 없는 경우
             cleaned_text = response_text.strip()
             if cleaned_text.startswith('{') and cleaned_text.endswith('}'):
-                return json.loads(cleaned_text)
+                parsed_data = json.loads(cleaned_text)
+                return GeminiResponse(parsed_data=parsed_data)
             
-            return {"raw_response": cleaned_text}
+            return GeminiResponse(raw_response=cleaned_text)
             
         except json.JSONDecodeError as e:
             self.logger.error(f"JSON 파싱 실패: {str(e)}")
             self.logger.debug(f"파싱 실패한 텍스트: {response_text}")
-            return {"raw_response": response_text} 
+            return GeminiResponse(
+                raw_response=response_text,
+                error=f"JSON 파싱 실패: {str(e)}"
+            )
+        except ValidationError as e:
+            self.logger.error(f"Pydantic 검증 실패: {str(e)}")
+            return GeminiResponse(
+                raw_response=response_text,
+                error=f"데이터 검증 실패: {str(e)}"
+            ) 

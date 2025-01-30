@@ -2,7 +2,7 @@ import os
 import pymysql
 from dotenv import load_dotenv
 import feedparser
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 from html import unescape
 import time
@@ -152,10 +152,58 @@ def insert_news(connection, news_data):
         connection.rollback()
         return False
 
-def fetch_rss_feed(feed_url):
+def is_within_24_hours(published_time):
+    """기사가 24시간 이내인지 확인"""
+    if not published_time:
+        return False
+        
+    try:
+        # 현재 시간과 기사 발행 시간의 차이 계산
+        current_time = datetime.now()
+        article_time = datetime(*published_time[:6])  # published_parsed는 time.struct_time 형식
+        time_difference = current_time - article_time
+        
+        return time_difference.total_seconds() <= 24 * 60 * 60  # 24시간을 초로 변환
+    except Exception as e:
+        logger.error(f"시간 비교 중 오류 발생: {e}")
+        return False
+
+def fetch_rss_feed(feed_url, connection, feed_info):
     """RSS 피드 데이터 가져오기"""
     try:
         feed = feedparser.parse(feed_url)
+        
+        # entries가 있는 경우에만 처리
+        if hasattr(feed, 'entries'):
+            # published_parsed를 기준으로 최신순 정렬
+            feed.entries.sort(
+                key=lambda x: x.get('published_parsed', time.gmtime(0)),
+                reverse=True
+            )
+            
+            filtered_entries = []
+            for entry in feed.entries:
+                # 24시간 이내 뉴스만 필터링
+                if not is_within_24_hours(entry.get('published_parsed')):
+                    continue
+                    
+                title = entry.title
+                summary = entry.get('summary', '')
+                
+                # 사진 기사 필터링
+                if is_photo_only_news(title, summary):
+                    logger.debug(f"사진 기사 건너뜀: {title}")
+                    continue
+                
+                # 중복 체크
+                if is_news_exists(connection, entry.link):
+                    logger.debug(f"중복된 뉴스 건너뜀: {title}")
+                    continue
+                    
+                filtered_entries.append(entry)
+            
+            feed.entries = filtered_entries
+            
         return feed
     except Exception as e:
         logger.error(f"RSS 피드 파싱 실패: {e}")
@@ -182,25 +230,15 @@ def main():
         # 각 RSS 피드 처리
         for feed_info in active_feeds:
             logger.info(f"Processing feed: {feed_info['mq_company']} - {feed_info['mq_category']}")
-            rss_data = fetch_rss_feed(feed_info['mq_rss'])
+            rss_data = fetch_rss_feed(feed_info['mq_rss'], connection, feed_info)
             
             if rss_data and hasattr(rss_data, 'entries'):
-                logger.info(f"Found {len(rss_data.entries)} entries from {feed_info['mq_company']}")
+                logger.info(f"Found {len(rss_data.entries)} valid entries from {feed_info['mq_company']}")
                 
                 # 각 뉴스 항목 처리
                 for entry in rss_data.entries:
                     title = entry.title
                     summary = entry.get('summary', '')
-                    
-                    # 사진 기사 필터링
-                    if is_photo_only_news(title, summary):
-                        logger.debug(f"사진 기사 건너뜀: {title}")
-                        continue
-                    
-                    # 중복 체크
-                    if is_news_exists(connection, entry.link):
-                        logger.debug(f"중복된 뉴스 건너뜀: {title}")
-                        continue
 
                     # Gemini로 뉴스 분석
                     analysis_result = gemini_client.get_response(
@@ -216,7 +254,7 @@ def main():
                     if analysis_result:
                         logger.info(f"Gemini 분석 결과: {analysis_result}")
 
-                        if analysis_result['total_score'] >= 8:
+                        if analysis_result.parsed_data['total_score'] >= 8:
                             insert_news(connection, {
                                 'category': feed_info['mq_category'],
                                 'title': title,
@@ -224,7 +262,7 @@ def main():
                                 'company': feed_info['mq_company'],
                                 'link': entry.link,
                                 'published': entry.published_parsed,
-                                'step1_score': analysis_result['total_score']
+                                'step1_score': analysis_result.parsed_data['total_score']
                             })
             else:
                 logger.error(f"Failed to fetch RSS feed: {feed_info['mq_rss']}")
