@@ -266,7 +266,7 @@ def main():
                     if analysis_result:
                         logger.info(f"제목: {title[:30]}... | 분석 결과: {analysis_result.parsed_data}")
 
-                        if analysis_result.parsed_data['total_score'] >= 8:
+                        if int(analysis_result.parsed_data['total_score']) >= 8:
                             insert_news(connection, {
                                 'category': feed_info['mq_category'],
                                 'title': title,
