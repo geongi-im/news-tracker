@@ -214,6 +214,18 @@ def is_photo_only_news(title, summary):
     # 제목에 '포토'가 포함되어 있거나 내용이 없는 경우
     return '포토' in title or not summary.strip()
 
+def update_rss_feed_update_time(connection, feed_id):
+    """RSS 피드 최종 업데이트 시간 기록"""
+    try:
+        with connection.cursor() as cursor:
+            query = "UPDATE mq_news_rss SET mq_update_date = NOW() WHERE idx = %s"
+            cursor.execute(query, (feed_id,))
+            connection.commit()
+            logger.info(f"RSS 피드 업데이트 시간 갱신 성공: ID {feed_id}")
+    except pymysql.Error as err:
+        logger.error(f"RSS 피드 업데이트 시간 갱신 실패: {err}")
+        connection.rollback()
+
 def main():
     logger.info("RSS 뉴스 수집 프로그램 시작")
     
@@ -252,7 +264,7 @@ def main():
                     )
                     
                     if analysis_result:
-                        logger.info(f"Gemini 분석 결과: {analysis_result}")
+                        logger.info(f"제목: {title[:30]}... | 분석 결과: {analysis_result.parsed_data}")
 
                         if analysis_result.parsed_data['total_score'] >= 8:
                             insert_news(connection, {
@@ -264,6 +276,9 @@ def main():
                                 'published': entry.published_parsed,
                                 'step1_score': analysis_result.parsed_data['total_score']
                             })
+
+                # 해당 RSS 피드의 모든 항목 처리 완료 후 업데이트
+                update_rss_feed_update_time(connection, feed_info['idx'])
             else:
                 logger.error(f"Failed to fetch RSS feed: {feed_info['mq_rss']}")
 

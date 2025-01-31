@@ -6,6 +6,7 @@ from google.genai import types
 import time
 from typing import Optional
 from pydantic import BaseModel, Field, ValidationError
+import os
 
 class GeminiResponse(BaseModel):
     """Gemini API 응답을 위한 Pydantic 모델"""
@@ -14,16 +15,20 @@ class GeminiResponse(BaseModel):
     error: Optional[str] = Field(None, description="에러 메시지")
 
 class GeminiClient:
-    def __init__(self, api_key, max_retries=3, retry_delay=5):
+    def __init__(self, api_key, max_retries=os.getenv('MAX_RETRIES', 3), 
+                 retry_delay=os.getenv('RETRY_DELAY', 5),
+                 success_delay=os.getenv('SUCCESS_DELAY', 3)):
         """Gemini API 클라이언트 초기화
         Args:
             api_key (str): Gemini API 키
             max_retries (int): 최대 재시도 횟수
             retry_delay (int): 재시도 대기 시간(초)
+            success_delay (int): 성공 시 대기 시간(초)
         """
         self.logger = logging.getLogger(__name__)
-        self.max_retries = max_retries
-        self.retry_delay = retry_delay
+        self.max_retries = int(max_retries)
+        self.retry_delay = int(retry_delay)
+        self.success_delay = int(success_delay)
         
         # Gemini API 클라이언트 초기화
         self.client = genai.Client(api_key=api_key)
@@ -35,7 +40,7 @@ class GeminiClient:
             response_mime_type="application/json"
         )
 
-    def _call_api_with_retry(self, model: str, contents: str) -> Optional[str]:
+    def _call_api_with_retry(self, model: str, contents: str):
         """재시도 로직이 포함된 API 호출
         Args:
             model (str): 모델 ID
@@ -50,12 +55,16 @@ class GeminiClient:
                     contents=contents,
                     config=self.config
                 )
-                return response.text
+                result = response.text
+                # 성공 시 3초 대기 (API 서버 부하 방지)
+                time.sleep(self.success_delay)
+                return result
             except Exception as e:
                 error_message = str(e)
-                if "429" in error_message or "RESOURCE_EXHAUSTED" in error_message:
-                    wait_time = self.retry_delay * (attempt + 1)  # 지수 백오프
-                    self.logger.warning(f"API 할당량 초과. {wait_time}초 후 재시도... (시도 {attempt + 1}/{self.max_retries})")
+                # 503(UNAVAILABLE) 및 429(RESOURCE_EXHAUSTED) 모두 처리
+                if any(err in error_message for err in ["503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED"]):
+                    wait_time = self.retry_delay * (2 ** attempt)  # 지수 백오프(5, 10, 20초...)
+                    self.logger.warning(f"API 서버 과부하. {wait_time}초 후 재시도... (시도 {attempt + 1}/{self.max_retries})")
                     time.sleep(wait_time)
                     continue
                 else:
@@ -127,7 +136,7 @@ class GeminiClient:
             self.logger.debug(f"상세 에러: {e}", exc_info=True)
             return None
             
-    def _parse_response(self, response_text: str) -> GeminiResponse:
+    def _parse_response(self, response_text: str):
         """응답 텍스트 파싱
         Args:
             response_text (str): Gemini API 응답 텍스트
