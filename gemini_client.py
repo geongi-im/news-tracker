@@ -1,12 +1,12 @@
 from pathlib import Path
 import json
-import logging
 from google import genai
 from google.genai import types
 import time
 from typing import Optional
 from pydantic import BaseModel, Field, ValidationError
 import os
+from utils.logger_util import LoggerUtil
 
 class GeminiResponse(BaseModel):
     """Gemini API 응답을 위한 Pydantic 모델"""
@@ -25,7 +25,7 @@ class GeminiClient:
             retry_delay (int): 재시도 대기 시간(초)
             success_delay (int): 성공 시 대기 시간(초)
         """
-        self.logger = logging.getLogger(__name__)
+        self.logger = LoggerUtil().get_logger()
         self.max_retries = int(max_retries)
         self.retry_delay = int(retry_delay)
         self.success_delay = int(success_delay)
