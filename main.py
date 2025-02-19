@@ -131,6 +131,7 @@ def main():
                 for entry in rss_data.entries:
                     title = entry.title
                     summary = entry.get('summary', '')
+                    summary = re.sub(r'<[^>]+>', '', summary)  # HTML 태그 제거
 
                     # Gemini로 뉴스 분석
                     analysis_result = gemini_client.get_response(
