@@ -130,6 +130,7 @@ def main():
                 # 각 뉴스 항목 처리
                 for entry in rss_data.entries:
                     title = entry.title
+                    published_date = time.localtime(time.mktime(entry.get('published_parsed', time.gmtime(0))) + 9 * 3600)
                     summary = entry.get('summary', '')
                     summary = re.sub(r'<[^>]+>', '', summary)  # HTML 태그 제거
 
@@ -154,7 +155,7 @@ def main():
                                 'content': summary,
                                 'company': feed_info['mq_company'],
                                 'source_url': entry.link,
-                                'published': entry.published_parsed,
+                                'published': published_date,
                                 'step1_score': analysis_result.parsed_data['total_score']
                             })
             else:
