@@ -1,6 +1,7 @@
 import logging
 from pathlib import Path
 from datetime import datetime
+import os
 
 class LoggerUtil:
     _instance = None
@@ -13,9 +14,11 @@ class LoggerUtil:
 
     def __init__(self):
         if not LoggerUtil._initialized:
-            # 로그 디렉토리 생성
-            log_dir = Path('log')
-            log_dir.mkdir(exist_ok=True)
+            # 로그 디렉토리
+            log_dir = Path(os.path.dirname(os.path.abspath(__file__))) / 'log'
+
+            # 디렉토리가 없으면 생성
+            log_dir.mkdir(parents=True, exist_ok=True)
 
             # 로그 파일 설정
             log_file = log_dir / f"{datetime.now().strftime('%Y-%m-%d')}_log.log"
