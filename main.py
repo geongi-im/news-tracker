@@ -141,7 +141,7 @@ def main():
                             'title': title,
                             'summary': summary
                         },
-                        model_id='gemini-1.5-flash-8b',
+                        model_id='gemini-2.0-flash-lite',
                         prompt_path='step1_prompt.md'
                     )
                     
