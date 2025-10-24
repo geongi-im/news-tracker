@@ -132,7 +132,7 @@ def main():
                     title = entry.title
                     published_date = time.localtime(time.mktime(entry.get('published_parsed', time.gmtime(0))) + 9 * 3600)
                     summary = entry.get('summary', '')
-                    summary = re.sub(r'<[^>]+>', '', summary)  # HTML 태그 제거
+                    summary = clean_html(summary)  # HTML 태그 및 엔티티 제거
 
                     # Gemini로 뉴스 분석
                     analysis_result = gemini_client.get_response(
