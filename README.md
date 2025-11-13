@@ -22,11 +22,7 @@ RSS기반에 뉴스를 수집하여 AI가 판단하여 저장하는 프로젝트
    ```
    - `.env` 파일을 열어 실제 값으로 수정합니다:
      - `GOOGLE_API_KEY`: Google Gemini API 키
-     - `MYSQL_HOST`: MySQL 호스트 주소
-     - `MYSQL_USER`: MySQL 사용자 이름
-     - `MYSQL_PORT`: MySQL 포트 번호
-     - `MYSQL_PASSWORD`: MySQL 비밀번호
-     - `MYSQL_DATABASE`: MySQL 데이터베이스 이름
+     - `BASE_URL`: API 저장할 서버 주소
 
 3. 필요한 패키지 설치
    ```bash

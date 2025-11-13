@@ -1,6 +1,9 @@
 import requests
 from utils.logger_util import LoggerUtil
 import time
+from dotenv import load_dotenv
+
+load_dotenv()
 
 class ApiError(Exception):
     """API 호출 관련 커스텀 예외"""
@@ -11,7 +14,12 @@ class ApiError(Exception):
 
 class ApiUtil:
     def __init__(self):
-        self.base_url = "http://localhost/api"
+        base_url = os.getenv("BASE_URL")
+        if not base_url:
+            raise EnvironmentError("환경 변수 'BASE_URL'가 설정되어 있지 않습니다.")
+
+        base_url = base_url.rstrip("/")
+        self.api_base_url = f"{base_url}/api"
         self.headers = {
             "Accept": "application/json",
             "Content-Type": "application/json"
@@ -21,7 +29,7 @@ class ApiUtil:
     def get_active_rss_feeds(self):
         """status가 1인 RSS 피드 목록 가져오기"""
         try:
-            response = requests.get(f"{self.base_url}/news/rss", headers=self.headers)
+            response = requests.get(f"{self.api_base_url}/news/rss", headers=self.headers)
             response.raise_for_status()
             
             response_data = response.json()
@@ -42,7 +50,7 @@ class ApiUtil:
         """뉴스 URL 중복 체크"""
         try:
             response = requests.get(
-                f"{self.base_url}/news/check",
+                f"{self.api_base_url}/news/check",
                 params={'url': source_url},
                 headers=self.headers
             )
@@ -70,7 +78,7 @@ class ApiUtil:
             }
             
             response = requests.post(
-                f"{self.base_url}/news",
+                f"{self.api_base_url}/news",
                 json=payload,
                 headers=self.headers
             )
