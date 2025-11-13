@@ -2,6 +2,7 @@ import requests
 from utils.logger_util import LoggerUtil
 import time
 from dotenv import load_dotenv
+import os
 
 load_dotenv()
 
