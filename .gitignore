@@ -1,6 +1,6 @@
 # Claude Code
 .commit_message.txt
-
+.claude/
 test.py
 run.sh
 
