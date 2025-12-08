@@ -25,6 +25,10 @@ for logger_name in ['google', 'google.auth', 'google.auth.transport', 'google.ai
 # Gemini 클라이언트 초기화
 gemini_client = GeminiClient(api_key=os.getenv('GOOGLE_API_KEY'))
 
+# 요청 간 지연 설정 (초)
+REQUEST_DELAY = float(os.getenv('REQUEST_DELAY', 0.2))  # 중복 체크 사이 지연
+BATCH_DELAY = float(os.getenv('BATCH_DELAY', 1.0))      # 피드 간 지연
+
 def clean_html(raw_html):
     """HTML 태그 제거"""
     # HTML 태그 제거
@@ -76,24 +80,28 @@ def fetch_rss_feed(feed_url, api_util, feed_info):
             )
             
             filtered_entries = []
-            for entry in feed.entries:
+            for idx, entry in enumerate(feed.entries):
                 # 24시간 이내 뉴스만 필터링
                 if not is_within_24_hours(entry.get('published_parsed')):
                     continue
-                    
+
                 title = entry.title
                 summary = entry.get('summary', '')
-                
+
                 # 사진 기사 필터링
                 if is_photo_only_news(title, summary):
                     logger.debug(f"사진 기사 건너뜀: {title}")
                     continue
-                
+
+                # ⭐ 중요: API 호출 전 지연 추가 (429 에러 방지)
+                if idx > 0:
+                    time.sleep(REQUEST_DELAY)
+
                 # 중복 체크
                 if api_util.is_news_exists(entry.link):
                     logger.debug(f"중복된 뉴스 건너뜀: {title}")
                     continue
-                    
+
                 filtered_entries.append(entry)
             
             feed.entries = filtered_entries
@@ -120,8 +128,14 @@ def main():
         logger.info(f"활성화된 RSS 피드 수: {len(active_feeds)}")
         
         # 각 RSS 피드 처리
-        for feed_info in active_feeds:
+        for feed_idx, feed_info in enumerate(active_feeds):
             logger.info(f"Processing feed: {feed_info['mq_company']} - {feed_info['mq_category']}")
+
+            # ⭐ 피드 간 지연 추가 (서버 부하 분산)
+            if feed_idx > 0:
+                logger.debug(f"피드 간 지연: {BATCH_DELAY}초 대기")
+                time.sleep(BATCH_DELAY)
+
             rss_data = fetch_rss_feed(feed_info['mq_rss'], api_util, feed_info)
             
             if rss_data and hasattr(rss_data, 'entries'):

@@ -15,9 +15,7 @@ class GeminiResponse(BaseModel):
     error: Optional[str] = Field(None, description="에러 메시지")
 
 class GeminiClient:
-    def __init__(self, api_key, max_retries=os.getenv('MAX_RETRIES', 3), 
-                 retry_delay=os.getenv('RETRY_DELAY', 5),
-                 success_delay=os.getenv('SUCCESS_DELAY', 3)):
+    def __init__(self, api_key, max_retries=None, retry_delay=None, success_delay=None):
         """Gemini API 클라이언트 초기화
         Args:
             api_key (str): Gemini API 키
@@ -26,13 +24,16 @@ class GeminiClient:
             success_delay (int): 성공 시 대기 시간(초)
         """
         self.logger = LoggerUtil().get_logger()
-        self.max_retries = int(max_retries)
-        self.retry_delay = int(retry_delay)
-        self.success_delay = int(success_delay)
-        
+
+        # 환경변수 제대로 읽기
+        self.max_retries = max_retries if max_retries is not None else int(os.getenv('GEMINI_MAX_RETRIES', 5))
+        self.retry_delay = retry_delay if retry_delay is not None else int(os.getenv('GEMINI_RETRY_DELAY', 5))
+        self.success_delay = success_delay if success_delay is not None else int(os.getenv('GEMINI_SUCCESS_DELAY', 3))
+        self.max_delay = int(os.getenv('GEMINI_MAX_DELAY', 60))  # 최대 대기 시간
+
         # Gemini API 클라이언트 초기화
         self.client = genai.Client(api_key=api_key)
-        
+
         # 프롬프트 디렉토리 설정
         self.prompt_dir = Path('prompt')
 
@@ -63,7 +64,8 @@ class GeminiClient:
                 error_message = str(e)
                 # 503(UNAVAILABLE) 및 429(RESOURCE_EXHAUSTED) 모두 처리
                 if any(err in error_message for err in ["503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED"]):
-                    wait_time = self.retry_delay * (2 ** attempt)  # 지수 백오프(5, 10, 20초...)
+                    # 지수 백오프 with 최대값 제한
+                    wait_time = min(self.retry_delay * (2 ** attempt), self.max_delay)
                     self.logger.warning(f"API 서버 과부하. {wait_time}초 후 재시도... (시도 {attempt + 1}/{self.max_retries})")
                     time.sleep(wait_time)
                     continue
