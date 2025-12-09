@@ -100,6 +100,33 @@ class ApiUtil:
             error_msg = f"뉴스 중복 체크 중 오류 발생: {str(err)}"
             self.logger.error(error_msg)
             return True  # 에러 시 안전하게 존재한다고 가정
+    
+    def is_news_exists_batch(self, urls):
+        """뉴스 URL 배치 중복 체크
+        Args:
+            urls (list): 체크할 URL 리스트
+        Returns:
+            dict: {url: exists} 형태의 딕셔너리
+        """
+        if not urls:
+            return {}
+        
+        try:
+            response = requests.post(
+                f"{self.api_base_url}/news/check-duplicate-batch",
+                json={"urls": urls},
+                timeout=10
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get('results', {})
+        except Exception as e:
+            self.logger.error(f"배치 중복 체크 실패: {e}")
+            # 실패 시 기존 방식으로 하나씩 체크
+            results = {}
+            for url in urls:
+                results[url] = self.is_news_exists(url)
+            return results
 
     def insert_news(self, news_data: dict):
         """뉴스 데이터 저장"""
