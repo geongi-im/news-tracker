@@ -8,6 +8,11 @@ from pydantic import BaseModel, Field, ValidationError
 import os
 from utils.logger_util import LoggerUtil
 
+# Gemini API 재시도 설정 상수
+GEMINI_MAX_RETRIES = 5
+GEMINI_RETRY_DELAY = 5
+GEMINI_SUCCESS_DELAY = 3
+
 class GeminiResponse(BaseModel):
     """Gemini API 응답을 위한 Pydantic 모델"""
     raw_response: Optional[str] = Field(None, description="파싱되지 않은 원본 응답")
@@ -15,21 +20,24 @@ class GeminiResponse(BaseModel):
     error: Optional[str] = Field(None, description="에러 메시지")
 
 class GeminiClient:
-    def __init__(self, api_key, max_retries=None, retry_delay=None, success_delay=None):
+    def __init__(self, api_key, model_id, max_retries=None, retry_delay=None, success_delay=None):
         """Gemini API 클라이언트 초기화
         Args:
             api_key (str): Gemini API 키
-            max_retries (int): 최대 재시도 횟수
-            retry_delay (int): 재시도 대기 시간(초)
-            success_delay (int): 성공 시 대기 시간(초)
+            model_id (str): 사용할 Gemini 모델 ID (예: 'gemini-2.0-flash-exp')
+            max_retries (int): 최대 재시도 횟수 (기본값: 환경변수 또는 5)
+            retry_delay (int): 재시도 대기 시간(초) (기본값: 환경변수 또는 5)
+            success_delay (int): 성공 시 대기 시간(초) (기본값: 환경변수 또는 3)
         """
         self.logger = LoggerUtil().get_logger()
 
-        # 환경변수 제대로 읽기
-        self.max_retries = max_retries if max_retries is not None else int(os.getenv('GEMINI_MAX_RETRIES', 5))
-        self.retry_delay = retry_delay if retry_delay is not None else int(os.getenv('GEMINI_RETRY_DELAY', 5))
-        self.success_delay = success_delay if success_delay is not None else int(os.getenv('GEMINI_SUCCESS_DELAY', 3))
-        self.max_delay = int(os.getenv('GEMINI_MAX_DELAY', 60))  # 최대 대기 시간
+        # 모델 ID 저장
+        self.model_id = model_id
+
+        # 재시도 설정 (상수 사용)
+        self.max_retries = max_retries if max_retries is not None else GEMINI_MAX_RETRIES
+        self.retry_delay = retry_delay if retry_delay is not None else GEMINI_RETRY_DELAY
+        self.success_delay = success_delay if success_delay is not None else GEMINI_SUCCESS_DELAY
 
         # Gemini API 클라이언트 초기화
         self.client = genai.Client(api_key=api_key)
@@ -64,8 +72,8 @@ class GeminiClient:
                 error_message = str(e)
                 # 503(UNAVAILABLE) 및 429(RESOURCE_EXHAUSTED) 모두 처리
                 if any(err in error_message for err in ["503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED"]):
-                    # 지수 백오프 with 최대값 제한
-                    wait_time = min(self.retry_delay * (2 ** attempt), self.max_delay)
+                    # 지수 백오프
+                    wait_time = self.retry_delay * (2 ** attempt)
                     self.logger.warning(f"API 서버 과부하. {wait_time}초 후 재시도... (시도 {attempt + 1}/{self.max_retries})")
                     time.sleep(wait_time)
                     continue
@@ -90,22 +98,17 @@ class GeminiClient:
             self.logger.error(f"프롬프트 파일 읽기 실패: {e}")
             return None
             
-    def get_response(self, input_data, prompt_path, model_id):
+    def get_response(self, input_data, prompt_path):
         """Gemini API 호출 및 응답 처리
         Args:
             input_data (dict|str|list): 프롬프트에 추가할 입력 데이터
             prompt_path (str): 프롬프트 템플릿 파일 경로
-            model_id (str): 사용할 Gemini 모델 ID
         Returns:
-            dict: 파싱된 응답 또는 None
+            GeminiResponse: 파싱된 응답 또는 None
         """
         try:
             if not prompt_path:
                 self.logger.error("프롬프트 경로가 지정되지 않음")
-                return None
-                
-            if not model_id:
-                self.logger.error("모델 ID가 지정되지 않음")
                 return None
                 
             # 프롬프트 템플릿 읽기
@@ -125,7 +128,7 @@ class GeminiClient:
             prompt = f"{template}\n\n{input_text}"
             
             # API 호출 (재시도 로직 포함)
-            response_text = self._call_api_with_retry(model_id, prompt)
+            response_text = self._call_api_with_retry(self.model_id, prompt)
             
             if not response_text:
                 return None
