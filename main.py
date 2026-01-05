@@ -7,9 +7,11 @@ from html import unescape
 import time
 import logging
 import json
+from deepseek_client import DeepSeekClient
 from gemini_client import GeminiClient
 from utils.api_util import ApiUtil, ApiError
 from utils.logger_util import LoggerUtil
+from utils.telegram_util import TelegramUtil
 
 # .env 파일 로드
 load_dotenv()
@@ -17,17 +19,29 @@ load_dotenv()
 # 로거 초기화
 logger = LoggerUtil().get_logger()
 
-# Google API 관련 로깅 설정
-for logger_name in ['google', 'google.auth', 'google.auth.transport', 'google.ai.generativelanguage', 'google.generativeai']:
-    google_logger = logging.getLogger(logger_name)
-    google_logger.setLevel(logging.ERROR)
+def initialize_ai_client():
+    """AI 클라이언트 초기화
 
-# Gemini 클라이언트 초기화
-gemini_client = GeminiClient(api_key=os.getenv('GOOGLE_API_KEY'))
+    Returns:
+        AI 클라이언트 객체 (DeepSeekClient 또는 GeminiClient)
 
-# 요청 간 지연 설정 (초)
-REQUEST_DELAY = float(os.getenv('REQUEST_DELAY', 0.2))  # 중복 체크 사이 지연
-BATCH_DELAY = float(os.getenv('BATCH_DELAY', 1.0))      # 피드 간 지연
+    Raises:
+        ValueError: 지원하지 않는 AI Provider인 경우
+    """
+    ai_provider = os.getenv('AI_PROVIDER')
+
+    if ai_provider == 'deepseek':
+        return DeepSeekClient(
+            api_key=os.getenv('DEEPSEEK_API_KEY'),
+            model_id=os.getenv('DEEPSEEK_MODEL')
+        )
+    elif ai_provider == 'gemini':
+        return GeminiClient(
+            api_key=os.getenv('GOOGLE_API_KEY'),
+            model_id=os.getenv('GEMINI_MODEL')
+        )
+    else:
+        raise ValueError(f"지원하지 않는 AI Provider: {ai_provider}")
 
 def clean_html(raw_html):
     """HTML 태그 제거"""
@@ -70,7 +84,7 @@ def fetch_rss_feed(feed_url, api_util, feed_info):
     """RSS 피드 데이터 가져오기"""
     try:
         feed = feedparser.parse(feed_url)
-        
+
         # entries가 있는 경우에만 처리
         if hasattr(feed, 'entries'):
             # published_parsed를 기준으로 최신순 정렬
@@ -78,9 +92,10 @@ def fetch_rss_feed(feed_url, api_util, feed_info):
                 key=lambda x: x.get('published_parsed', time.gmtime(0)),
                 reverse=True
             )
-            
-            filtered_entries = []
-            for idx, entry in enumerate(feed.entries):
+
+            # 1단계: 24시간 이내 + 사진 기사 아닌 것만 필터링
+            pre_filtered_entries = []
+            for entry in feed.entries:
                 # 24시간 이내 뉴스만 필터링
                 if not is_within_24_hours(entry.get('published_parsed')):
                     continue
@@ -88,53 +103,114 @@ def fetch_rss_feed(feed_url, api_util, feed_info):
                 title = entry.title
                 summary = entry.get('summary', '')
 
-                # 사진 기사 필터링
-                if is_photo_only_news(title, summary):
+                # 사진 기사 필터링 (제목에 '포토' 포함 또는 내용 없음)
+                if '포토' in title or not summary.strip():
                     logger.debug(f"사진 기사 건너뜀: {title}")
                     continue
 
-                # ⭐ 중요: API 호출 전 지연 추가 (429 에러 방지)
-                if idx > 0:
-                    time.sleep(REQUEST_DELAY)
+                pre_filtered_entries.append(entry)
 
-                # 중복 체크
-                if api_util.is_news_exists(entry.link):
-                    logger.debug(f"중복된 뉴스 건너뜀: {title}")
-                    continue
+            # 2단계: 배치로 중복 체크
+            if pre_filtered_entries:
+                urls = [entry.link for entry in pre_filtered_entries]
+                logger.info(f"배치 중복 체크 시작: {len(urls)}개 URL")
 
-                filtered_entries.append(entry)
-            
+                duplicate_results = api_util.is_news_exists_batch(urls)
+
+                # 중복되지 않은 뉴스만 최종 필터링
+                filtered_entries = []
+                for entry in pre_filtered_entries:
+                    if duplicate_results.get(entry.link, False):
+                        logger.debug(f"중복된 뉴스 건너뜀: {entry.title}")
+                        continue
+                    filtered_entries.append(entry)
+
+                logger.info(f"중복 체크 완료: {len(filtered_entries)}/{len(pre_filtered_entries)}개 뉴스가 새로운 뉴스")
+            else:
+                filtered_entries = []
+
             feed.entries = filtered_entries
-            
+
         return feed
     except Exception as e:
         logger.error(f"RSS 피드 파싱 실패: {e}")
         return None
 
-def is_photo_only_news(title, summary):
-    """사진 기사 여부 확인"""
-    # 제목에 '포토'가 포함되어 있거나 내용이 없는 경우
-    return '포토' in title or not summary.strip()
-
 def main():
     logger.info("RSS 뉴스 수집 프로그램 시작")
-    
-    # API 클라이언트 초기화
-    api_util = ApiUtil()
 
+    # 필수 환경변수 체크
+    required_env_vars = [
+        "AI_PROVIDER",
+        "BASE_URL",
+        "TELEGRAM_CHAT_TEST_ID",
+        "TELEGRAM_CHAT_ID",
+        "TELEGRAM_BOT_TOKEN"
+    ]
+
+    missing_vars = []
+    for var in required_env_vars:
+        if not os.getenv(var):
+            missing_vars.append(var)
+
+    if missing_vars:
+        error_message = f"🛑 필수 환경변수가 설정되지 않았습니다: {', '.join(missing_vars)}"
+        logger.error(error_message)
+        raise ValueError(error_message)
+    else:
+        ai_provider = os.getenv('AI_PROVIDER')
+        telegram_util = TelegramUtil()
+        api_util = ApiUtil()
+
+    # 선택 환경변수 체크
+    if ai_provider not in ['deepseek', 'gemini']:
+        error_message = f"AI_PROVIDER 값이 올바르지 않습니다: {ai_provider} (deepseek 또는 gemini만 가능)"
+        logger.error(error_message)
+        raise ValueError(error_message)
+    
+    # AI Provider별 필수 환경변수 검증
+    if ai_provider == 'deepseek':
+        DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
+        DEEPSEEK_MODEL = os.getenv('DEEPSEEK_MODEL')
+        if not DEEPSEEK_API_KEY:
+            error_message = "DEEPSEEK_API_KEY가 설정되지 않았습니다."
+            logger.error(error_message)
+            raise ValueError(error_message)
+        if not DEEPSEEK_MODEL:
+            error_message = "DEEPSEEK_MODEL이 설정되지 않았습니다. (예: deepseek-chat)"
+            logger.error(error_message)
+            raise ValueError(error_message)
+    elif ai_provider == 'gemini':
+        GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
+        GEMINI_MODEL = os.getenv('GEMINI_MODEL')
+        if not GOOGLE_API_KEY:
+            error_message = "GOOGLE_API_KEY가 설정되지 않았습니다."
+            logger.error(error_message)
+            raise ValueError(error_message)
+        if not GEMINI_MODEL:
+            error_message = "GEMINI_MODEL이 설정되지 않았습니다. (예: gemini-flash-lite-latest)"
+            logger.error(error_message)
+            raise ValueError(error_message)
+
+
+    # AI 클라이언트 초기화
+    try:
+        ai_client = initialize_ai_client()
+        logger.info(f"AI 클라이언트 초기화 완료: {ai_provider}")
+    except Exception as e:
+        logger.error(f"AI 클라이언트 초기화 실패: {e}")
+        telegram_util.send_test_message(f"[news-tracker] 🚨 AI 클라이언트 초기화 실패: {str(e)}")
+        return
+
+    # RSS 피드 데이터 가져오기
     try:
         # 활성화된 RSS 피드 목록 가져오기
         active_feeds = api_util.get_active_rss_feeds()
         logger.info(f"활성화된 RSS 피드 수: {len(active_feeds)}")
         
         # 각 RSS 피드 처리
-        for feed_idx, feed_info in enumerate(active_feeds):
+        for feed_info in active_feeds:
             logger.info(f"Processing feed: {feed_info['mq_company']} - {feed_info['mq_category']}")
-
-            # ⭐ 피드 간 지연 추가 (서버 부하 분산)
-            if feed_idx > 0:
-                logger.debug(f"피드 간 지연: {BATCH_DELAY}초 대기")
-                time.sleep(BATCH_DELAY)
 
             rss_data = fetch_rss_feed(feed_info['mq_rss'], api_util, feed_info)
             
@@ -148,18 +224,17 @@ def main():
                     summary = entry.get('summary', '')
                     summary = clean_html(summary)  # HTML 태그 및 엔티티 제거
 
-                    # Gemini로 뉴스 분석
-                    analysis_result = gemini_client.get_response(
+                    # AI 모델로 뉴스 분석
+                    analysis_result = ai_client.get_response(
                         input_data={
                             'category': feed_info['mq_category'],
                             'title': title,
                             'summary': summary
                         },
-                        model_id='gemini-2.0-flash-lite',
                         prompt_path='step1_prompt.md'
                     )
                     
-                    if analysis_result:
+                    if analysis_result and analysis_result.parsed_data:
                         logger.info(f"제목: {title[:30]}... | 분석 결과: {analysis_result.parsed_data}")
 
                         if int(analysis_result.parsed_data['total_score']) >= 8:
@@ -177,6 +252,7 @@ def main():
 
     except Exception as e:
         logger.error(f"예상치 못한 오류 발생: {e}", exc_info=True)
+        telegram_util.send_test_message(f"[news-tracker] 🚨 예상치 못한 오류: {str(e)}")
 
     logger.info("RSS 뉴스 수집 프로그램 종료")
 
