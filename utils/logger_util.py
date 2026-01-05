@@ -14,8 +14,12 @@ class LoggerUtil:
 
     def __init__(self):
         if not LoggerUtil._initialized:
-            # 로그 디렉토리
-            log_dir = Path(os.path.dirname(os.path.abspath(__file__))) / 'log'
+            # 루트 디렉토리 경로 찾기 (상위 디렉토리)
+            current_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+            root_dir = current_dir.parent
+            
+            # 로그 디렉토리를 루트 경로의 logs 폴더로 설정
+            log_dir = root_dir / 'logs'
 
             # 디렉토리가 없으면 생성
             log_dir.mkdir(parents=True, exist_ok=True)
@@ -47,8 +51,13 @@ class LoggerUtil:
             # 핸들러 추가
             self.logger.addHandler(file_handler)
             self.logger.addHandler(console_handler)
-
+            
             LoggerUtil._initialized = True
 
     def get_logger(self):
         return self.logger 
+
+# 모듈 테스트용
+if __name__ == "__main__":
+    logger = LoggerUtil().get_logger()
+    logger.info("로거 테스트 메시지") 
