@@ -6,6 +6,10 @@ import os
 
 load_dotenv()
 
+# REST API 재시도 설정 상수
+MAX_RETRIES = 3
+RETRY_DELAY = 1.0
+
 def simple_retry(func, max_retries=3, delay=1.0, backoff=2.0):
     """간단한 재시도 로직
     Args:
@@ -51,10 +55,6 @@ class ApiUtil:
         }
         self.logger = LoggerUtil().get_logger()
 
-        # 재시도 설정
-        self.max_retries = int(os.getenv('REST_MAX_RETRIES', 3))
-        self.retry_delay = float(os.getenv('REST_RETRY_DELAY', 1.0))
-
     def get_active_rss_feeds(self):
         """status가 1인 RSS 피드 목록 가져오기"""
         def _fetch():
@@ -75,7 +75,7 @@ class ApiUtil:
             return response_data.get('data', [])
 
         try:
-            return simple_retry(_fetch, max_retries=self.max_retries, delay=self.retry_delay)
+            return simple_retry(_fetch, max_retries=MAX_RETRIES, delay=RETRY_DELAY)
         except requests.RequestException as err:
             error_msg = f"RSS 피드 조회 중 오류 발생: {str(err)}"
             self.logger.error(error_msg)
@@ -95,7 +95,7 @@ class ApiUtil:
             return response_data.get('exists', True)
 
         try:
-            return simple_retry(_check, max_retries=self.max_retries, delay=self.retry_delay)
+            return simple_retry(_check, max_retries=MAX_RETRIES, delay=RETRY_DELAY)
         except requests.RequestException as err:
             error_msg = f"뉴스 중복 체크 중 오류 발생: {str(err)}"
             self.logger.error(error_msg)
@@ -159,7 +159,7 @@ class ApiUtil:
             return True
 
         try:
-            return simple_retry(_insert, max_retries=self.max_retries, delay=self.retry_delay)
+            return simple_retry(_insert, max_retries=MAX_RETRIES, delay=RETRY_DELAY)
         except requests.RequestException as err:
             error_msg = f"뉴스 저장 중 오류 발생: {str(err)}"
             self.logger.error(error_msg)
